@@ -4,7 +4,7 @@
 
 OPTIONS="-a0x0230ad -s -rpower.rrd power.log"
 
-cd ../bin
-rtl_fm -Alut -f433550000 -s200000 -r96000 -g10 2> /dev/null | ./efergy $OPTIONS >> pwr  
+cd /home/pi/power
+rtl_fm -Alut -f433580000 -s200000 -r96000 -g10 2> /dev/null | ./efergy $OPTIONS >> pwr  
  
 

@@ -148,7 +148,7 @@
 #include <pthread.h>
 
 // comment out to use valgrind without the leaks in rrd
-#define USE_RRD
+//#define USE_RRD
 
 #ifdef USE_RRD
 #include <rrd.h>   // rrd may require apt-get install librrd-dev 
