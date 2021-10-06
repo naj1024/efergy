@@ -273,10 +273,10 @@ void logToMqtt(std::string mqttBroker, MQTTClient &client, double power)
 				//fprintf(stdout, "Error: MQTT message delivery failed , %d\n", rc);
 				lostConnection(nullptr, nullptr);
 			}
-			else
-			{
-				fprintf(stdout, "Message with delivery token %d delivered\n", token);
-			}
+			//else
+			//{
+			//	fprintf(stdout, "Message with delivery token %d delivered\n", token);
+			//}
 		}
 		else
 		{
