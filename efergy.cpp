@@ -105,7 +105,10 @@
  * 
  * Compile
  * =======
- *  g++ -O3 -oefergy efergy.cpp -lpthread -lrrd
+ *  g++ -O3 -oefergy efergy.cpp -lpthread
+ * 
+ *  add -lrrd for rrd 
+ *  add -lpaho-mqtt3c for paho mqtt
  * 
  * Testing
  * =======
@@ -147,10 +150,22 @@
 #include <unistd.h>
 #include <pthread.h>
 
-// comment out to use valgrind without the leaks in rrd
-//#define USE_RRD
+#define HAVE_MQTT
+#ifdef HAVE_MQTT
+#include "MQTTClient.h"
 
-#ifdef USE_RRD
+#define MQTT_ADDRESS     "192.168.0.1:1883" // example only
+#define MQTT_CLIENTID    "efergy"
+#define MQTT_TOPIC       "atc/power/va"
+#define MQTT_QOS         1
+#define MQTT_TIMEOUT     10000L
+
+bool mqttConnectionValid;
+#endif
+
+// comment out to use valgrind without the leaks in rrd
+//#define HAVE_RRD
+#ifdef HAVE_RRD
 #include <rrd.h>   // rrd may require apt-get install librrd-dev 
 #endif
 
@@ -185,6 +200,92 @@ static void signalHandler(int signal)
 {
     _exitNow=true;
 }
+
+#ifdef HAVE_MQTT
+void lostConnection(void *context, char *cause)
+{
+	mqttConnectionValid = false;
+	fprintf(stdout, "Lost connection to MQTT broker\n");
+}
+
+bool connectToMqttBroker(std::string mqttBroker, MQTTClient &client)
+{
+	bool error=false;
+	
+	MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+	int mqtt_connection;
+
+	MQTTClient_create(&client, 
+					mqttBroker.c_str(), 
+					MQTT_CLIENTID,
+					MQTTCLIENT_PERSISTENCE_NONE, 
+					NULL);
+	conn_opts.keepAliveInterval = 20;
+	conn_opts.cleansession = 1;
+
+	// asynchronous selected if we use the callbacks
+	// MQTTClient_setCallbacks(client, NULL, lostConnection, NULL, NULL);
+
+	if ((mqtt_connection = MQTTClient_connect(client, &conn_opts)) != MQTTCLIENT_SUCCESS)
+	{
+		printf("Failed to connect to mqtt '%s', return code %d\n", 
+				mqttBroker.c_str(),
+				mqtt_connection);
+		error=true;
+		mqttConnectionValid = false;
+	}
+	else
+	{
+		fprintf(stdout, "Connected to MQTT broker '%s'\n", mqttBroker.c_str());
+		mqttConnectionValid = true;
+	}    
+	return(error);
+ }
+
+void logToMqtt(std::string mqttBroker, MQTTClient &client, double power)
+{
+	bool mqttErr = false;
+	// connect if required and publish the power
+	if(!mqttConnectionValid)
+	{
+		mqttErr = connectToMqttBroker(mqttBroker, client);
+	}
+	if(!mqttErr)
+	{
+		char powerS[100]={0};
+		snprintf(powerS, 99, "%.0f", power);
+		MQTTClient_message pubmsg = MQTTClient_message_initializer;
+		pubmsg.payload = powerS;
+		pubmsg.payloadlen = strlen(powerS);
+		pubmsg.qos = MQTT_QOS;
+		pubmsg.retained = 0;
+		MQTTClient_deliveryToken token;
+		//fprintf(stdout, "published '%s'\n", powerS);
+		int rc = MQTTClient_publishMessage(client, MQTT_TOPIC, &pubmsg, &token);
+		if(rc == MQTTCLIENT_SUCCESS)
+		{
+			//fprintf(stdout, "Waiting for up to %d seconds for publication of %s\n"
+			//	"on topic %s for client with ClientID: %s\n",
+			//	(int)(MQTT_TIMEOUT/1000), powerS, MQTT_TOPIC, MQTT_CLIENTID);
+			rc = MQTTClient_waitForCompletion(client, token, MQTT_TIMEOUT);
+			if(rc != MQTTCLIENT_SUCCESS)
+			{
+				//fprintf(stdout, "Error: MQTT message delivery failed , %d\n", rc);
+				lostConnection(nullptr, nullptr);
+			}
+			else
+			{
+				fprintf(stdout, "Message with delivery token %d delivered\n", token);
+			}
+		}
+		else
+		{
+			fprintf(stdout, "Error: MQTT message publication failed , %d\n", rc);
+			lostConnection(nullptr, nullptr);
+		}
+	}
+}
+#endif
 
 bool checksum(unsigned char * bytes, int length)
 {
@@ -388,6 +489,15 @@ void logLatest(double power)
         fprintf(latest, "%s, %.0f\n", timeNow.c_str(), power);
         fclose(latest);
     }
+#ifdef LOG_ALL_POWERS
+    FILE *all=fopen("allPowers.txt", "a");
+    if(all)
+    {
+        std::string timeNow=getDateTime();
+        fprintf(all, "%s, %.0f\n", timeNow.c_str(), power);
+        fclose(all);
+    }
+#endif
 }
 
 
@@ -464,7 +574,7 @@ void* logData(void *arg)
                                 
             //fprintf(stdout, "rrd %s %s %s\n", rrdArgs[0], rrdArgs[1], rrdArgs[2]);
             
-#ifdef USE_RRD
+#ifdef HAVE_RRD
             if(rrd_update(3, rrdArgs) == -1)
             {
                 fprintf(stderr, "Error, rrd failed, %s\n", 
@@ -534,7 +644,7 @@ void accumulatePower(double power)
 
 void printHelp(char *programName)
 {
-    fprintf(stderr, "Usage: %s [-aAdhlrsv] logFile\n", programName);
+    fprintf(stderr, "Usage: %s [options] logFile\n", programName);
     fprintf(stderr, "\n");
     fprintf(stderr, "Efergy meter decoder, requires rtl_fm as input\n");
     fprintf(stderr, "\n");
@@ -545,7 +655,12 @@ void printHelp(char *programName)
     fprintf(stderr, "-h    : This help\n");
     fprintf(stderr, "-l    : Log period in minutes, default %d\n", 
                                 DEFAULT_LOG_PERIOD);
-    fprintf(stderr, "-r x  : enable rrd logging to database file x\n");     
+#ifdef HAVE_MQTT
+    fprintf(stderr, "-m x  : MQTT broker address x, e.g %s\n", MQTT_ADDRESS);
+#endif
+#ifdef HAVE_RRD
+    fprintf(stderr, "-r x  : enable rrd logging to database file x\n");
+#endif     
     fprintf(stderr, "-s    : Stats every %d packets to stats.txt\n", 
                                 DEFAULT_STAT_PACKETS);
     fprintf(stderr, "-v x  : Voltage to use, default %0.fv\n", 
@@ -573,11 +688,12 @@ int main(int argc, char **argv)
     float voltage=DEFAULT_VOLTAGE;
     unsigned int logPeriod=DEFAULT_LOG_PERIOD;
     std::string rrdFilename="";
+    std::string mqttBroker = "";
     
     // parse command line parameters
     opterr = 0;
     int command;
-        while ((command = getopt (argc, argv, "a:AdDhl:r:sv:")) != -1)
+        while ((command = getopt (argc, argv, "a:AdDhl:m:r:sv:")) != -1)
         {
         switch (command)
         {
@@ -616,6 +732,9 @@ int main(int argc, char **argv)
                 }
                 break;
             }
+            case('m'):
+				mqttBroker = optarg;
+				break;
             case 'r':
             {
                 rrdFilename=optarg;
@@ -697,6 +816,11 @@ int main(int argc, char **argv)
             exit(1);
         }
     }
+    
+#ifdef HAVE_MQTT
+	MQTTClient client;
+	bool mqttErr = connectToMqttBroker(mqttBroker, client);
+#endif
     
     // address filtering
     unsigned char address[3]={0};       
@@ -801,6 +925,10 @@ int main(int argc, char **argv)
             
                 // log latest to a file
                 logLatest(power);
+                
+#ifdef HAVE_MQTT
+				logToMqtt(mqttBroker, client, power);
+#endif
     
                 // push the data to the logging thread
                 // we record the maximum power in the logging interval
@@ -835,6 +963,11 @@ int main(int argc, char **argv)
     }
     fclose(output);
     
+#ifdef HVAE_MQTT
+	MQTTClient_disconnect(client, 10000);
+	MQTTClient_destroy(&client);
+#endif
+
     // stats on packets
     if(statsOutput)
     {
