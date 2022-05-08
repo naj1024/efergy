@@ -1,0 +1,13 @@
+[Unit]
+Description=energy monitoring from efergy clamp meter
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/pi/efergy/efergy.sh
+
+[Install]
+WantedBy=multi-user.target
+
