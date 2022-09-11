@@ -21,17 +21,17 @@
  * 
  */
 
-/* A program to decode the efergy fm data and log the power measurements
+/* A program to decode the efergy fm data and log the power (VA) measurements
  * to file.
  * 
  * The program takes in demodulated data from rtl_fm which is tuned to
  * 433MHz (approximately). The rtl_fm is using some form of DVB-T USB
  * stick as its digitiser.
- * An EFERGY monitor is providing an FSK signal containg AC power 
+ * An EFERGY monitor is providing an FSK signal containg AC VA 
  * measurements from a clamp meter on the mains of the house.
  * 
  * This program will sync to the structure of the data, details given 
- * below, and output the resulting power measurement to file. 
+ * below, and output the resulting VA measurement to file. 
  * 
  * The program is based on the work of 
  *      Nathaniel Elijah 
@@ -105,7 +105,7 @@
  * 
  * Compile
  * =======
- *  g++ -O3 -oefergy efergy.cpp -lpthread
+ *  g++ -O3 -oefergy efergy.cpp -lpthread -lpaho-mqtt3c
  * 
  *  add -lrrd for rrd 
  *  add -lpaho-mqtt3c for paho mqtt
@@ -156,7 +156,9 @@
 
 #define MQTT_ADDRESS     "192.168.0.1:1883" // example only
 #define MQTT_CLIENTID    "efergy"
-#define MQTT_TOPIC       "atc/power/va"
+#define MQTT_TOPIC_VA    "atc/power/va"
+#define MQTT_TOPIC_VAHRHR "atc/power/vahrhr"
+#define MQTT_TOPIC_VAHRDAY "atc/power/vahrday"
 #define MQTT_QOS         1
 #define MQTT_TIMEOUT     10000L
 
@@ -177,10 +179,10 @@ bool mqttConnectionValid;
 #define DEFAULT_LOG_PERIOD (1)
 #define DEFAULT_STAT_PACKETS (100)
 
-// logging thread needs access to the power
+// logging thread needs access to the va
 // so mutex lock and global variable
 pthread_mutex_t dataLock;
-double _power=0;
+double _va=0;
 // structure for passing mutliple parmaeters into thread at creation
 struct threadParams
 {
@@ -242,31 +244,31 @@ bool connectToMqttBroker(std::string mqttBroker, MQTTClient &client)
 	return(error);
  }
 
-void logToMqtt(std::string mqttBroker, MQTTClient &client, double power)
+void logVaToMqtt(std::string mqttBroker, MQTTClient &client, double va)
 {
 	bool mqttErr = false;
-	// connect if required and publish the power
+	// connect if required and publish the va
 	if(!mqttConnectionValid)
 	{
 		mqttErr = connectToMqttBroker(mqttBroker, client);
 	}
 	if(!mqttErr)
 	{
-		char powerS[100]={0};
-		snprintf(powerS, 99, "%.0f", power);
+		char vaS[100]={0};
+		snprintf(vaS, 99, "%.0f", va);
 		MQTTClient_message pubmsg = MQTTClient_message_initializer;
-		pubmsg.payload = powerS;
-		pubmsg.payloadlen = strlen(powerS);
+		pubmsg.payload = vaS;
+		pubmsg.payloadlen = strlen(vaS);
 		pubmsg.qos = MQTT_QOS;
 		pubmsg.retained = 0;
 		MQTTClient_deliveryToken token;
-		//fprintf(stdout, "published '%s'\n", powerS);
-		int rc = MQTTClient_publishMessage(client, MQTT_TOPIC, &pubmsg, &token);
+		//fprintf(stdout, "published '%s'\n", vaS);
+		int rc = MQTTClient_publishMessage(client, MQTT_TOPIC_VA, &pubmsg, &token);
 		if(rc == MQTTCLIENT_SUCCESS)
 		{
 			//fprintf(stdout, "Waiting for up to %d seconds for publication of %s\n"
 			//	"on topic %s for client with ClientID: %s\n",
-			//	(int)(MQTT_TIMEOUT/1000), powerS, MQTT_TOPIC, MQTT_CLIENTID);
+			//	(int)(MQTT_TIMEOUT/1000), vaS, MQTT_TOPIC_VA, MQTT_CLIENTID);
 			rc = MQTTClient_waitForCompletion(client, token, MQTT_TIMEOUT);
 			if(rc != MQTTCLIENT_SUCCESS)
 			{
@@ -277,6 +279,80 @@ void logToMqtt(std::string mqttBroker, MQTTClient &client, double power)
 			//{
 			//	fprintf(stdout, "Message with delivery token %d delivered\n", token);
 			//}
+		}
+		else
+		{
+			fprintf(stdout, "Error: MQTT message publication failed , %d\n", rc);
+			lostConnection(nullptr, nullptr);
+		}
+	}
+}
+
+void logVaHrToMqtt(std::string mqttBroker, MQTTClient &client, double vahr)
+{
+	bool mqttErr = false;
+	// connect if required and publish the va
+	if(!mqttConnectionValid)
+	{
+		mqttErr = connectToMqttBroker(mqttBroker, client);
+	}
+	if(!mqttErr)
+	{
+		char vaS[100]={0};
+		snprintf(vaS, 99, "%.0f", vahr);
+		MQTTClient_message pubmsg = MQTTClient_message_initializer;
+		pubmsg.payload = vaS;
+		pubmsg.payloadlen = strlen(vaS);
+		pubmsg.qos = MQTT_QOS;
+		pubmsg.retained = 0;
+		MQTTClient_deliveryToken token;
+		//fprintf(stdout, "published '%s'\n", vaS);
+		int rc = MQTTClient_publishMessage(client, MQTT_TOPIC_VAHRHR, &pubmsg, &token);
+		if(rc == MQTTCLIENT_SUCCESS)
+		{
+			rc = MQTTClient_waitForCompletion(client, token, MQTT_TIMEOUT);
+			if(rc != MQTTCLIENT_SUCCESS)
+			{
+				//fprintf(stdout, "Error: MQTT message delivery failed , %d\n", rc);
+				lostConnection(nullptr, nullptr);
+			}
+		}
+		else
+		{
+			fprintf(stdout, "Error: MQTT message publication failed , %d\n", rc);
+			lostConnection(nullptr, nullptr);
+		}
+	}
+}
+
+void logVaDayToMqtt(std::string mqttBroker, MQTTClient &client, double vaday)
+{
+	bool mqttErr = false;
+	// connect if required and publish the va
+	if(!mqttConnectionValid)
+	{
+		mqttErr = connectToMqttBroker(mqttBroker, client);
+	}
+	if(!mqttErr)
+	{
+		char vaS[100]={0};
+		snprintf(vaS, 99, "%.0f", vaday);
+		MQTTClient_message pubmsg = MQTTClient_message_initializer;
+		pubmsg.payload = vaS;
+		pubmsg.payloadlen = strlen(vaS);
+		pubmsg.qos = MQTT_QOS;
+		pubmsg.retained = 0;
+		MQTTClient_deliveryToken token;
+		//fprintf(stdout, "published '%s'\n", vaS);
+		int rc = MQTTClient_publishMessage(client, MQTT_TOPIC_VAHRDAY, &pubmsg, &token);
+		if(rc == MQTTCLIENT_SUCCESS)
+		{
+			rc = MQTTClient_waitForCompletion(client, token, MQTT_TIMEOUT);
+			if(rc != MQTTCLIENT_SUCCESS)
+			{
+				//fprintf(stdout, "Error: MQTT message delivery failed , %d\n", rc);
+				lostConnection(nullptr, nullptr);
+			}
 		}
 		else
 		{
@@ -304,7 +380,7 @@ bool checksum(unsigned char * bytes, int length)
     return(passed);
 }
 
-double getPower(unsigned char * currentBytes, float voltage)
+double getVa(unsigned char * currentBytes, float voltage)
 {
     // currentBytes[3], 0,1 are the current and 2 is a scaling factor
         
@@ -312,11 +388,11 @@ double getPower(unsigned char * currentBytes, float voltage)
     static double scaling[15]={1,2,4,8,16,32,64,128,256,512,1024,
                     2048,4096,8192,16384};
 
-    double power = 0.0;
+    double va = 0.0;
     double current = static_cast<double>(currentBytes[0])*256.0 + 
                      static_cast<double>(currentBytes[1]);  
 
-    power = ((voltage * current) / 32768.0 );
+    va = ((voltage * current) / 32768.0 );
     
     unsigned char scaleByte = currentBytes[2];
     if (scaleByte & 0x80) // MSbit set of scaling
@@ -325,16 +401,16 @@ double getPower(unsigned char * currentBytes, float voltage)
         scaleByte = 0xff-scaleByte+1;
         // get the scaling factor, limit it to 0..15
         scaleByte = scaleByte&0x0f; 
-        power = power / scaling[scaleByte];
+        va = va / scaling[scaleByte];
     }
     else
     {
         // get the scaling factor, limit it to 0..15
         scaleByte=scaleByte&0x0f; 
-        power = power * scaling[scaleByte];
+        va = va * scaling[scaleByte];
     }
 
-    return(power);
+    return(va);
 }
 
 bool checkAddress(unsigned char *addressBytes,  
@@ -480,21 +556,21 @@ std::string getDateTime()
     return(dateTime);
 }
 
-void logLatest(double power)
+void logLatest(double va)
 {
     FILE *latest=fopen("latest.txt", "w");
     if(latest)
     {
         std::string timeNow=getDateTime(); 
-        fprintf(latest, "%s, %.0f\n", timeNow.c_str(), power);
+        fprintf(latest, "%s, %.0f\n", timeNow.c_str(), va);
         fclose(latest);
     }
-#ifdef LOG_ALL_POWERS
+#ifdef LOG_ALL_VAS
     FILE *all=fopen("allPowers.txt", "a");
     if(all)
     {
         std::string timeNow=getDateTime();
-        fprintf(all, "%s, %.0f\n", timeNow.c_str(), power);
+        fprintf(all, "%s, %.0f\n", timeNow.c_str(), va);
         fclose(all);
     }
 #endif
@@ -503,14 +579,14 @@ void logLatest(double power)
 
 void* logData(void *arg)
 {
-    // thread to log powers to file
+    // thread to log vas to file
     // arg is logging threadParams
     // logs to file every delay seconds
-    // resets the global _power to zero every time it logs to file
+    // resets the global _va to zero every time it logs to file
     
     struct threadParams *params=static_cast<struct threadParams *>(arg);
-    double lastPower=0;
-    double power=0;
+    double lastVa=0;
+    double va=0;
     bool rrdLogging=false;
     char *rrdArgs[3];
     char *rrdCommand=0;
@@ -545,31 +621,31 @@ void* logData(void *arg)
             sleep(1);
         }
         
-        // lock access to the global _power
+        // lock access to the global _va
         pthread_mutex_lock(&dataLock);
-        power=_power;
-        _power=0;
+        va=_va;
+        _va=0;
         pthread_mutex_unlock(&dataLock);
 
         bool estimated=false;
     
-        if(power == 0)
+        if(va == 0)
         {
-            power=lastPower;
+            va=lastVa;
             estimated=true;
         }
         
         // logging to output file
         std::string timeNow=getDateTime(); 
         fprintf(params->output, "%s %.0f %c\n", timeNow.c_str(), 
-                                power, (estimated?'e':' '));        
+                                va, (estimated?'e':' '));        
         fflush(params->output);
         
         // logging to rrd
         if(rrdLogging)
         {
             char tmp[100]={0};
-            snprintf(tmp, 99, "N:%.0f", power); 
+            snprintf(tmp, 99, "N:%.0f", va); 
             rrdArgs[2]=tmp;
                                 
             //fprintf(stdout, "rrd %s %s %s\n", rrdArgs[0], rrdArgs[1], rrdArgs[2]);
@@ -591,7 +667,7 @@ void* logData(void *arg)
             sleep(1);
         }
         
-        lastPower=power;
+        lastVa=va;
     }
     fprintf(stderr, "Logging thread exit\n");
 
@@ -624,20 +700,55 @@ void outputStats(unsigned long long totalPackets,
     return;
 }
 
-void accumulatePower(double power)
-{
-    static double _totalPower=0.0;
-    static time_t _lastTime=time(0);
-    
-    time_t now=time(0);
-    
-    // number of seconds between last and current
-    double diff=difftime(now, _lastTime);
-    diff=floor( (fabs(diff)+3) /6);
+void accumulateVA(double va, double &totalVaHour, double &totalVaDay)
+{	
+	// forever total of VA
+    //static double _totalVa = 0.0;
+	static bool _first = true;
+	
+	time_t now = time(0);
+	static time_t _lastTime = now;
 
-    // totaling in kw/hr
-    _totalPower+=(power/600000)*diff;
-    fprintf(stdout, "TOTAL: %.3f %.0f %.1f\n", _totalPower, power, diff);
+	// ignore leap seconds but set last time to seconds at start of this hour
+    static time_t _lastHour = (now - (now % 3600));
+	static time_t _lastDay = (now - (now % (3600*24)));
+
+	
+	// hour rollover
+	if(difftime(now, _lastHour) >= 3600)
+	{
+		totalVaHour = 0.0;
+		_lastHour = (now - (now % 3600)); // start of this hour
+	}
+	// day rollover
+	if(difftime(now, _lastDay) >= (3600*24))
+	{
+		totalVaDay = 0.0;
+		_lastDay = (now - (now % (3600*24))); // start of this day
+	}
+	
+    // number of seconds between last and current
+    double diff = floor(fabs(difftime(now, _lastTime)));
+
+	if(_first)
+	{
+		_first = false;
+	}
+	else
+	{
+		// totaling all vahr
+		//_totalVa += va/(3600/diff);
+		
+		// totaling in current hour
+		totalVaHour += va/(3600/diff);
+		
+		// totaling in current day
+		totalVaDay += va/((3600*24)/diff);
+	}
+	
+    //fprintf(stdout, "TOTAL: %.2fVA %.2fVA %.2fVAHr %0.3fVADay %.0fsec\n", _totalVa, va, totalVaHour, totalVaDay, diff);
+    //fprintf(stdout, "VA: %.2fVA %.2fVAHr %0.3fVADay %.0fsec\n", va, totalVaHour, totalVaDay, diff);
+    //fflush(stdout);
     _lastTime=now;
     return;
 }
@@ -755,7 +866,7 @@ int main(int argc, char **argv)
                 }
                 else
                 {
-                    fprintf(stderr, "Using %.0fvolts for power calculations\n", voltage);
+                    fprintf(stderr, "Using %.0fvolts for VA calculations\n", voltage);
                 }
                 break;
             }
@@ -880,6 +991,10 @@ int main(int argc, char **argv)
     time_t lastPacketTime=time(0);
     mapOfDelayCounts statsGood;
 
+	// VA used in this hour
+	double vaHour = 0.0;
+	// VA used in this day
+	double vaDay = 0.0;
 
     // the core of the program, loop until input ends
     // reading from stdin, if there is nothing coming in we will hang
@@ -903,7 +1018,7 @@ int main(int argc, char **argv)
             fprintf(stdout, "\n");
         }
  
-        double power=0.0;
+        double va=0.0;
         bool passed=checksum(packet, LENGTH_PROTOCOL_BYTES);
         if(passed)
         {
@@ -920,32 +1035,34 @@ int main(int argc, char **argv)
                     lastPacketTime=timeNow;
                 }
             
-                // extract the power 
-                power = getPower(&packet[LENGTH_PROTOCOL_BYTES-4], voltage);
+                // extract the va 
+                va = getVa(&packet[LENGTH_PROTOCOL_BYTES-4], voltage);
             
+			    accumulateVA(va, vaHour, vaDay); // will reset the vaHour value to zero on the hour
+
                 // log latest to a file
-                logLatest(power);
-                
+                logLatest(va);
+				
 #ifdef HAVE_MQTT
-				logToMqtt(mqttBroker, client, power);
+				logVaToMqtt(mqttBroker, client, va);
+				logVaHrToMqtt(mqttBroker, client, vaHour);
+				logVaDayToMqtt(mqttBroker, client, vaDay);
 #endif
     
                 // push the data to the logging thread
-                // we record the maximum power in the logging interval
-                // _power will be zero if it has been logged already
+                // we record the maximum va in the logging interval
+                // _va will be zero if it has been logged already
                 pthread_mutex_lock(&dataLock);
-                if(power>_power)
+                if(va > _va)
                 {
-                    _power=power;
+                    _va =  va;
                 }
                 pthread_mutex_unlock(&dataLock);
-                
-                accumulatePower(power);
             }
 
             if(debug)
             {
-                fprintf(stdout, "%.0f ", power);
+                fprintf(stdout, "%.0f ", va);
                 for(int i=0; i<LENGTH_PROTOCOL_BYTES; i++)
                 {
                     fprintf(stdout, "%02x", packet[i]);
