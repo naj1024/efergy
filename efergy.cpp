@@ -736,14 +736,16 @@ void accumulateVA(double va, double &totalVaHour, double &totalVaDay)
 	}
 	else
 	{
+		double vahr = va/(3600/diff);
+		
 		// totaling all vahr
-		//_totalVa += va/(3600/diff);
+		//_totalVa += vahr;
 		
 		// totaling in current hour
-		totalVaHour += va/(3600/diff);
+		totalVaHour += vahr;
 		
 		// totaling in current day
-		totalVaDay += va/((3600*24)/diff);
+		totalVaDay += vahr;
 	}
 	
     //fprintf(stdout, "TOTAL: %.2fVA %.2fVA %.2fVAHr %0.3fVADay %.0fsec\n", _totalVa, va, totalVaHour, totalVaDay, diff);
